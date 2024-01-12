@@ -1,0 +1,231 @@
+#include "ADS1X15.h"
+#include <SPI.h>
+#include <Wire.h>
+//#include <Adafruit_GFX.h>
+//#include <Adafruit_SSD1306.h>
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+// Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
+//Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+const int PIN_CS = 10;
+const int GAIN_1 = 0x1;
+const int GAIN_2 = 0x0;
+const unsigned int steps = 512;
+unsigned int sines_of_steps[steps];
+ADS1115 ADS(0x48);
+int blue_dac = 2000; //390
+int green_dac = 720; //2320
+int green_sample_size = 10;
+int blue_sample_size = 100;
+int loopcounter = 0;
+unsigned long long intensity_storage = 0;
+int temp_counter = 0;
+//long long data_storage=0;
+float avg_storage = 0;
+float avg_green = 0;
+float avg_blue = 0;
+float old_green = 0;
+float old_blue = 0;
+int split_counter = 0;
+int intensity_display = 1;
+int plotter = 0;
+int blue_stable_time = 50;
+int green_stable_time = 50;
+int green_samples = 100;
+int blue_samples = 100;
+int moving_average_array[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+int sorting_array[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+int moving_average = 0;
+int j = 0;
+int temp_sort = 0;
+void setup()
+{
+  Serial.begin(115200);
+  Serial.println(__FILE__);
+  Serial.print("ADS1X15_LIB_VERSION: ");
+  Serial.println(ADS1X15_LIB_VERSION);
+  pinMode(PIN_CS, OUTPUT);
+  SPI.begin();
+  SPI.setClockDivider(SPI_CLOCK_DIV2);
+  ADS.begin();
+  //if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C))
+  { // Address 0x3D for 128x64
+    //Serial.println(F("SSD1306 allocation failed"));
+    //for(;;);
+  }
+}
+void setOutput(byte channel, byte gain, byte shutdown, unsigned int val)
+{
+  byte lowByte = val & 0xff;
+  byte highByte = ((val >> 8) & 0xff) | channel << 7 | gain << 5 | shutdown << 4;
+  PORTB &= 0xfb;
+  SPI.transfer(highByte);
+  SPI.transfer(lowByte);
+  PORTB |= 0x4;
+}
+void loop()
+{
+  //display.clearDisplay();
+  ADS.setGain(0);
+  loopcounter = 0;
+  avg_storage = 0;
+  split_counter = 0;
+  setOutput(1, GAIN_1, 1, 0);
+  setOutput(0, GAIN_1, 1, green_dac);
+  memset (moving_average_array, 0, 10);
+  temp_counter = 0;
+  intensity_storage = 0;
+  float f = ADS.toVoltage(1);  // voltage factor
+  for (int i = 0; i < green_samples + green_stable_time; i += 1)
+  {
+    int16_t val_0 = ADS.readADC(0);
+    int16_t val_1 = ADS.readADC(1);
+    int16_t val_2 = ADS.readADC(2);
+    int16_t val_3 = ADS.readADC(3);
+    moving_average_array[i % 10] = val_1;
+    for (int j = 0; j < 10; j++)
+    {
+      sorting_array[j] = moving_average_array[j];
+    }
+    if (i >= green_stable_time)
+    {
+      for (int j = 0; j < 6; j++)
+      {
+        for (int k = 0; k < (9 - j); k++)
+        {
+          if (sorting_array[k] > sorting_array[k + 1])
+          {
+            temp_sort = sorting_array[k];
+            sorting_array[k] = sorting_array[k + 1];
+            sorting_array[k + 1] = temp_sort;
+          }
+        }
+      }
+      moving_average = (sorting_array[4] / 2) + (sorting_array[5] / 2);
+      if ((val_1 > (moving_average * 0.9)) and (val_1 < (moving_average * 1.1)))
+      {
+        intensity_storage += val_1;
+        temp_counter++;
+      }
+    }
+    if (intensity_display == 1)
+    {
+      Serial.print("DAC_value : "); Serial.print(i); Serial.print('\t'); Serial.print('\t'); Serial.print("Green_Resistor_drop: "); Serial.print(val_2);
+      Serial.print('\t'); Serial.print('\t'); Serial.print("PD_output: "); Serial.print(val_1); Serial.print('\t'); Serial.print('\t'); Serial.print("PD_2X_output: "); Serial.println(val_0);
+    }
+    if (plotter == 1)
+    {
+      Serial.println(val_1);
+    }
+    //delay(200);
+  }
+  avg_green = intensity_storage / temp_counter;
+  delay(500);
+  setOutput(0, GAIN_1, 1, 0);
+  setOutput(1, GAIN_1, 1, blue_dac);
+  memset (moving_average_array, 0, 10);
+  temp_counter = 0;
+  intensity_storage = 0;
+  for (int i = 0; i < blue_samples + blue_stable_time; i += 1)
+  {
+    int16_t val_0 = ADS.readADC(0);
+    int16_t val_1 = ADS.readADC(1);
+    int16_t val_2 = ADS.readADC(2);
+    int16_t val_3 = ADS.readADC(3);
+    moving_average_array[i % 10] = val_1;
+    //Serial.println(moving_average_array[0]);
+    for (int j = 0; j < 10; j++)
+    {
+      sorting_array[j] = moving_average_array[j];
+    }
+    //Serial.println(sorting_array[0]);
+    if (i >= blue_stable_time)
+    {
+      for (int j = 0; j < 6; j++)
+      {
+        for (int k = 0; k < (9 - j); k++)
+        {
+          if (sorting_array[k] > sorting_array[k + 1])
+
+          {
+            temp_sort = sorting_array[k];
+            sorting_array[k] = sorting_array[k + 1];
+            sorting_array[k + 1] = temp_sort;
+          }
+        }
+      }
+      moving_average = (sorting_array[4] / 2) + (sorting_array[5] / 2);
+      if ((val_1 > (moving_average * 0.9)) and (val_1 < (moving_average * 1.1)))
+      {
+        intensity_storage += val_1
+        temp_counter++;
+      }
+    }
+    if (intensity_display == 1)
+    {
+      Serial.print("DAC_value : "); Serial.print(i); Serial.print('\t'); Serial.print('\t'); Serial.print("Blue_Resistor_drop: "); Serial.print(val_3);
+      Serial.print('\t'); Serial.print('\t'); Serial.print("PD_output: "); Serial.print(val_1); Serial.print('\t'); Serial.print('\t'); Serial.print("PD_2X_output: "); Serial.println(val_0);
+    }
+    if (plotter == 1)
+    {
+      Serial.println(val_1);
+    }
+    //delay(200);
+  }
+  avg_blue = intensity_storage / temp_counter;
+  setOutput(0, GAIN_1, 1, 0);
+  setOutput(1, GAIN_1, 1, 0);
+  Serial.print("Green Intensity: "); Serial.println(avg_green);
+  Serial.print("Blue Intensity: "); Serial.println(avg_blue);
+  //display.clearDisplay();
+  //display.setTextSize(1);
+  //display.setTextColor(WHITE);
+  //display.setCursor(0, 10);
+  // Display static text
+  //display.print("Green: ");display.println(int(avg_green));
+  //display.setCursor(0, 30);
+  //display.print("Blue: ");display.println(int(avg_blue));
+  //display.display();
+  delay(20000);
+  
+}
+
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        /* Style for the button */
+        .button {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #3498db;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        /* Style for the floating window */
+        .floating-window {
+            display: none;
+            position: absolute;
+            background-color: #fff;
+            border: 1px solid #ccc;
+            padding: 10px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        }
+
+        /* Show the floating window when hovering over the button */
+        .button:hover + .floating-window {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <button class="button">Hover Me</button>
+    <div class="floating-window">
+        <p>This is a floating window.</p>
+        <p>You can put any content you want in here.</p>
+    </div>
+</body>
+</html>
